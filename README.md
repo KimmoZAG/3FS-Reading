@@ -25,4 +25,4 @@ python -m http.server 8000 --directory docs
 
 ## GitHub Pages
 
-发布源为 `main` 分支的 `/docs` 目录。修改 `docs/` 并推送到 `main` 后，GitHub Pages 会重新发布。
+Pages 的发布源为 GitHub Actions。推送 `docs/` 或发布工作流的变更到 `main` 后，工作流会上传并部署 `docs/`。也可以在 [发布工作流](https://github.com/KimmoZAG/3FS-Reading/actions/workflows/deploy-pages.yml) 中选择 **Run workflow**，手动发布 `main`。
