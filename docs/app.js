@@ -4,6 +4,7 @@ document.documentElement.classList.add("has-js");
 
 const sidebar = document.getElementById("sidebar");
 const menu = document.querySelector(".mobile-menu");
+const menuScrim = document.querySelector(".menu-scrim");
 const screens = [...document.querySelectorAll("[data-screen]")];
 const home = document.getElementById("home");
 const navLinks = [...sidebar.querySelectorAll(".nav-link")];
@@ -12,6 +13,21 @@ const breadcrumb = document.getElementById("breadcrumb");
 function setMenu(open) {
   sidebar.classList.toggle("is-open", open);
   menu.setAttribute("aria-expanded", String(open));
+  menuScrim.hidden = !open;
+}
+
+for (const lesson of document.querySelectorAll("[data-lesson]")) {
+  const contents = document.createElement("nav");
+  contents.className = "lesson-toc";
+  contents.setAttribute("aria-label", "本章目录");
+  for (const heading of lesson.querySelectorAll(".lesson-body > h2[id]")) {
+    heading.tabIndex = -1;
+    const link = document.createElement("a");
+    link.href = `#${heading.id}`;
+    link.textContent = heading.textContent;
+    contents.append(link);
+  }
+  lesson.querySelector(".lesson-head").append(contents);
 }
 
 function showScreen(moveFocus) {
@@ -35,7 +51,8 @@ function showScreen(moveFocus) {
 
   const isNestedAnchor = anchor && anchor !== screen && screen.contains(anchor);
   if (moveFocus) {
-    const heading = (isNestedAnchor ? anchor : screen).querySelector("[tabindex='-1']");
+    const focusArea = isNestedAnchor ? anchor : screen;
+    const heading = focusArea.matches("[tabindex='-1']") ? focusArea : focusArea.querySelector("[tabindex='-1']");
     heading?.focus({ preventScroll: true });
   }
   if (isNestedAnchor) {
@@ -65,6 +82,13 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+menuScrim.addEventListener("click", () => {
+  setMenu(false);
+  menu.focus();
+});
+
+document.querySelector(".mobile-brand").addEventListener("click", () => setMenu(false));
+window.matchMedia("(max-width: 700px)").addEventListener?.("change", () => setMenu(false));
 window.addEventListener("hashchange", () => showScreen(true));
 showScreen(false);
 
@@ -84,6 +108,7 @@ try {
 const progressBar = document.getElementById("course-progress");
 const progressCount = document.getElementById("progress-count");
 const progressCaption = document.getElementById("progress-caption");
+const homeProgress = document.getElementById("home-progress");
 const startLink = document.getElementById("start-learning");
 const marks = [...document.querySelectorAll("[data-mark]")];
 const completions = [...document.querySelectorAll("[data-completion]")];
@@ -95,6 +120,8 @@ function renderProgress() {
   progressBar.textContent = count;
   progressCount.textContent = count;
   progressCaption.textContent = storesProgress ? "完成一章后可手动标记" : "进度仅保留在当前页面";
+  homeProgress.hidden = completed.size === 0;
+  homeProgress.textContent = `已完成 ${count}`;
 
   for (const button of marks) {
     const done = completed.has(button.dataset.mark);
@@ -150,13 +177,36 @@ window.addEventListener("storage", (event) => {
 
 renderProgress();
 
+const conceptQuery = document.getElementById("concept-query");
+const conceptCount = document.getElementById("concept-count");
+const conceptEmpty = document.getElementById("concept-empty");
+const concepts = [...document.querySelectorAll("[data-concept]")];
+
+function filterConcepts() {
+  const words = conceptQuery.value.trim().toLowerCase().split(/\s+/);
+  let matches = 0;
+  for (const concept of concepts) {
+    const passage = concept.textContent.toLowerCase();
+    concept.hidden = !words.every((word) => passage.includes(word));
+    if (!concept.hidden) matches += 1;
+  }
+  conceptCount.textContent = `${matches} / ${concepts.length} 个知识点`;
+  conceptEmpty.hidden = matches > 0;
+}
+
+conceptQuery.addEventListener("input", filterConcepts);
+filterConcepts();
+
 const map = document.querySelector(".topology-map");
 const canvas = map.querySelector("canvas");
 const pathButtons = [...document.querySelectorAll("[data-path]")];
 const pathCaption = document.getElementById("path-caption");
+const pathPhase = document.getElementById("path-phase");
 const pathInfo = {
-  open: { nodes: ["client", "meta", "foundation"], caption: "打开文件时，客户端通过 Meta 获取属性和布局。" },
-  read: { nodes: ["client", "storage", "ssd"], caption: "取得布局和路由后，客户端直接向 Storage 读取 chunk。" },
+  open: { nodes: ["client", "meta", "foundation"], color: "#c6f783", phase: "元数据", caption: "路径需要解析时，客户端向 Meta 查询 inode 和布局。" },
+  read: { nodes: ["client", "storage", "ssd"], color: "#c6f783", phase: "数据 I/O", caption: "客户端用布局和路由定位可读副本，Storage 从 SSD 取回数据。" },
+  write: { nodes: ["client", "storage", "ssd"], color: "#ffd68c", phase: "副本提交", caption: "数据块写入从对应链的 Head 开始，经过逐跳复制和提交确认。" },
+  routing: { nodes: ["client", "manager"], color: "#9adee6", phase: "集群控制", caption: "Mgmtd 发布各链的成员、版本和状态，客户端缓存路由用于寻址。" },
 };
 const topologyNodes = [...map.querySelectorAll("[data-node]")];
 let requestPath = "open";
@@ -190,7 +240,7 @@ function drawTopology() {
     context.setLineDash(dashed ? [3, 4] : []);
     context.lineJoin = "round";
     context.lineWidth = active ? 1.8 : 1;
-    context.strokeStyle = active ? "#c6f783" : "#668373";
+    context.strokeStyle = active ? pathInfo[requestPath].color : "#668373";
     context.moveTo(...pointsToDraw[0]);
     for (const point of pointsToDraw.slice(1)) context.lineTo(...point);
     context.stroke();
@@ -204,7 +254,7 @@ function drawTopology() {
 
   const channels = [
     { active: requestPath === "open", service: meta, endpoint: foundation },
-    { active: requestPath === "read", service: storage, endpoint: ssd },
+    { active: requestPath === "read" || requestPath === "write", service: storage, endpoint: ssd },
   ];
   for (const { active, service, endpoint } of channels.sort((left, right) => Number(left.active) - Number(right.active))) {
     stroke([[client.x, client.bottom], [client.x, branch], [service.x, branch], [service.x, service.top]], active);
@@ -212,16 +262,19 @@ function drawTopology() {
     if (active) {
       context.beginPath();
       context.arc(service.x, branch, 3, 0, 2 * Math.PI);
-      context.fillStyle = "#c6f783";
+      context.fillStyle = pathInfo[requestPath].color;
       context.fill();
     }
   }
+  if (requestPath === "routing") stroke([[client.x, client.bottom], [manager.x, manager.top]], true, true);
 }
 
 function updateTopology() {
   const info = pathInfo[requestPath];
+  map.closest(".topology").style.setProperty("--signal", info.color);
   for (const node of topologyNodes) node.classList.toggle("is-active", info.nodes.includes(node.dataset.node));
   for (const button of pathButtons) button.setAttribute("aria-pressed", String(button.dataset.path === requestPath));
+  pathPhase.textContent = info.phase;
   pathCaption.textContent = info.caption;
   drawTopology();
 }
@@ -233,11 +286,13 @@ for (const button of pathButtons) {
   });
 }
 
-new ResizeObserver(drawTopology).observe(map);
+if (typeof ResizeObserver === "function") new ResizeObserver(drawTopology).observe(map);
+else window.addEventListener("resize", drawTopology);
 updateTopology();
 
 const replicaButtons = [...document.querySelectorAll("[data-replica]")];
 const advance = document.getElementById("advance-replication");
+const previous = document.getElementById("previous-replication");
 const reset = document.getElementById("reset-replication");
 const relaxed = document.getElementById("relaxed-read");
 const stepCount = document.getElementById("replication-step");
@@ -245,53 +300,66 @@ const stepStatus = document.getElementById("replication-status");
 const readResult = document.getElementById("read-result");
 const replicaNames = ["Head", "Mid", "Tail"];
 const commitStep = [5, 4, 3];
-let committedVersion = 1;
-let replicationStep = 0;
+const chainEdges = [...document.querySelectorAll(".chain-edge")];
+let replicationTick = 0;
 
-function getReplica(index) {
-  if (replicationStep >= commitStep[index]) return { version: committedVersion + 1, pending: false };
-  return { version: committedVersion, pending: replicationStep >= index + 1 };
+function replicationState() {
+  if (replicationTick === 0) return { step: 0, baseVersion: 1 };
+  const completedSteps = replicationTick - 1;
+  return { step: completedSteps % 5 + 1, baseVersion: Math.floor(completedSteps / 5) + 1 };
+}
+
+function getReplica(index, { step, baseVersion }) {
+  if (step >= commitStep[index]) return { version: baseVersion + 1, pending: false };
+  return { version: baseVersion, pending: step >= index + 1 };
 }
 
 function renderReplication() {
-  const newVersion = `v${committedVersion + 1}`;
+  const state = replicationState();
+  const { step, baseVersion } = state;
+  const newVersion = `v${baseVersion + 1}`;
   const descriptions = [
-    `三个目标都可返回 v${committedVersion}。下一次写入将产生 ${newVersion}。`,
+    `三个目标都可返回 v${baseVersion}。下一次写入将产生 ${newVersion}。`,
     `Head 记录待提交的 ${newVersion}。Mid 和 Tail 仍可读取旧版本。`,
     `Mid 收到 ${newVersion}。Head 与 Mid 都有未提交更新。`,
     `Tail 收到并提交 ${newVersion}。它已可返回新版本，确认开始向前回传。`,
     `Mid 收到确认并提交 ${newVersion}。Head 仍在等待确认。`,
     `Head 收到确认并提交 ${newVersion}。写入完成，三个目标均可读到新版本。`,
   ];
-  const nextActions = [`开始写入 ${newVersion}`, "复制到 Mid", "在 Tail 提交", "确认回传到 Mid", "确认回传到 Head", `开始写入 v${committedVersion + 2}`];
+  const nextActions = [`开始写入 ${newVersion}`, "复制到 Mid", "在 Tail 提交", "确认回传到 Mid", "确认回传到 Head", `开始写入 v${baseVersion + 2}`];
 
   replicaButtons.forEach((button, index) => {
-    const { version, pending } = getReplica(index);
+    const { version, pending } = getReplica(index, state);
     button.querySelector(".replica-version").textContent = `已提交 v${version}`;
     button.querySelector(".replica-state").textContent = pending ? `待提交 ${newVersion}` : "可读";
     button.classList.toggle("is-pending", pending);
-    button.classList.toggle("is-committed", version > committedVersion);
+    button.classList.toggle("is-committed", version > baseVersion);
   });
+  const arrows = { 2: ["forward", ""], 3: ["", "forward"], 4: ["", "ack"], 5: ["ack", ""] };
+  const signals = arrows[step] ?? ["", ""];
+  chainEdges.forEach((edge, index) => { edge.dataset.signal = signals[index]; });
 
-  stepCount.textContent = replicationStep === 0 ? "就绪" : `步骤 ${replicationStep} / 5`;
-  stepStatus.textContent = descriptions[replicationStep];
-  advance.textContent = nextActions[replicationStep];
+  stepCount.textContent = step === 0 ? "就绪" : `步骤 ${step} / 5`;
+  stepStatus.textContent = descriptions[step];
+  advance.textContent = nextActions[step];
+  previous.disabled = replicationTick === 0;
   readResult.textContent = "点击副本查看读结果。";
   delete readResult.dataset.result;
 }
 
 advance.addEventListener("click", () => {
-  if (replicationStep === 5) {
-    committedVersion += 1;
-    replicationStep = 0;
-  }
-  replicationStep += 1;
+  replicationTick += 1;
   renderReplication();
 });
 
+previous.addEventListener("click", () => {
+  replicationTick -= 1;
+  renderReplication();
+  if (previous.disabled) advance.focus();
+});
+
 reset.addEventListener("click", () => {
-  committedVersion = 1;
-  replicationStep = 0;
+  replicationTick = 0;
   relaxed.checked = false;
   renderReplication();
 });
@@ -299,12 +367,13 @@ reset.addEventListener("click", () => {
 replicaButtons.forEach((button, index) => {
   button.addEventListener("click", () => {
     const name = replicaNames[index];
-    const { version, pending } = getReplica(index);
+    const state = replicationState();
+    const { version, pending } = getReplica(index, state);
     readResult.dataset.result = pending ? "pending" : "ok";
     if (!pending) {
       readResult.textContent = `${name} 返回本地已提交的 v${version}。`;
     } else if (relaxed.checked) {
-      readResult.textContent = `${name} 返回未提交的 v${committedVersion + 1}。本次读取启用了放宽一致性的选项。`;
+      readResult.textContent = `${name} 返回未提交的 v${state.baseVersion + 1}。本次读取启用了放宽一致性的选项。`;
     } else {
       readResult.textContent = `${name} 返回 kChunkNotCommit。客户端可以短暂等待后重试。`;
     }
@@ -316,11 +385,11 @@ renderReplication();
 const chunkSize = document.getElementById("chunk-size");
 const stripeSize = document.getElementById("stripe-size");
 const offset = document.getElementById("file-offset");
+const readLength = document.getElementById("read-length");
 const offsetRange = document.getElementById("offset-range");
 const chunkGrid = document.getElementById("chunk-grid");
-const indexResult = document.getElementById("chunk-index");
-const offsetResult = document.getElementById("chunk-offset");
-const chainResult = document.getElementById("chain-result");
+const layoutTable = document.getElementById("layout-table");
+const layoutSegments = document.getElementById("layout-segments");
 const calculation = document.getElementById("layout-calculation");
 const chainNames = ["A", "B", "C", "D"];
 const chunks = [];
@@ -334,7 +403,10 @@ for (let index = 0; index < 8; index += 1) {
   number.textContent = `#${index}`;
   const chain = document.createElement("span");
   chain.className = "chunk-chain";
-  button.append(number, chain);
+  const coverage = document.createElement("span");
+  coverage.className = "chunk-coverage";
+  coverage.setAttribute("aria-hidden", "true");
+  button.append(number, chain, coverage);
   button.addEventListener("click", () => {
     offset.value = index * Number(chunkSize.value);
     renderLayout();
@@ -343,36 +415,166 @@ for (let index = 0; index < 8; index += 1) {
   chunks.push({ button, chain });
 }
 
+function splitRead(start, length, size, stripes) {
+  const segments = [];
+  const end = start + length;
+  while (start < end) {
+    const index = Math.floor(start / size);
+    const innerOffset = start % size;
+    const segmentLength = Math.min(size - innerOffset, end - start);
+    segments.push({ start, index, innerOffset, length: segmentLength, chain: chainNames[index % stripes] });
+    start += segmentLength;
+  }
+  return segments;
+}
+
 function renderLayout() {
   const size = Number(chunkSize.value);
   const stripes = Number(stripeSize.value);
-  const value = offset.valueAsNumber;
-  const max = chunks.length * size - 1;
-  const valid = Number.isInteger(value) && value >= 0 && value <= max;
-  const index = valid ? Math.floor(value / size) : -1;
-  const slot = index % stripes;
-  const remainder = value % size;
+  const start = offset.valueAsNumber;
+  const length = readLength.valueAsNumber;
+  const capacity = chunks.length * size;
+  const validStart = Number.isInteger(start) && start >= 0 && start < capacity;
+  const maxLength = validStart ? capacity - start : capacity;
+  const validLength = Number.isInteger(length) && length > 0 && length <= maxLength;
+  const segments = validStart && validLength ? splitRead(start, length, size, stripes) : [];
+  const byIndex = new Map(segments.map((segment) => [segment.index, segment]));
 
-  offset.max = max;
-  offset.setAttribute("aria-invalid", String(!valid));
-  offsetRange.textContent = `可选偏移 0–${max} KiB`;
+  offset.max = capacity - 1;
+  readLength.max = maxLength;
+  offset.setAttribute("aria-invalid", String(!validStart));
+  readLength.setAttribute("aria-invalid", String(!validLength));
+  offsetRange.textContent = `示例文件共 ${capacity} KiB。点任一块可把起点移到块首。`;
   chunks.forEach(({ button, chain }, position) => {
     const name = chainNames[position % stripes];
+    const segment = byIndex.get(position);
     button.dataset.chain = name;
-    button.setAttribute("aria-pressed", String(position === index));
-    button.setAttribute("aria-label", `Chunk ${position}，链 ${name}`);
+    button.toggleAttribute("data-covered", Boolean(segment));
+    button.style.setProperty("--range-start", `${(segment?.innerOffset ?? 0) * 100 / size}%`);
+    button.style.setProperty("--range-width", `${(segment?.length ?? 0) * 100 / size}%`);
+    const coverageLabel = segment ? `，本次读取 ${segment.length} KiB` : "";
+    button.setAttribute("aria-label", `Chunk ${position}，链 ${name}${coverageLabel}，从块首开始`);
     chain.textContent = `链 ${name}`;
   });
 
-  indexResult.textContent = valid ? index : "—";
-  offsetResult.textContent = valid ? `${remainder} KiB` : "—";
-  chainResult.textContent = valid ? `链 ${chainNames[slot]}` : "—";
-  calculation.textContent = valid
-    ? `${value} ÷ ${size} 取整得到 ${index}，余数为 ${remainder}。第 ${slot} 号条带槽对应链 ${chainNames[slot]}。`
-    : `请输入 0 到 ${max} 之间的整数偏移。`;
+  const rows = segments.map((segment) => {
+    const row = document.createElement("tr");
+    const values = [`[${segment.start}, ${segment.start + segment.length})`, `#${segment.index}`, `${segment.innerOffset} KiB`, `${segment.length} KiB`, segment.chain];
+    for (const value of values) row.insertCell().textContent = value;
+    return row;
+  });
+  layoutSegments.replaceChildren(...rows);
+  layoutTable.hidden = segments.length === 0;
+
+  if (!validStart) {
+    calculation.textContent = `请输入 0 至 ${capacity - 1} KiB 之间的整数起点。`;
+  } else if (!validLength) {
+    calculation.textContent = `从 ${start} KiB 开始，可读取 1 至 ${maxLength} KiB。`;
+  } else {
+    const chains = new Set(segments.map((segment) => segment.chain));
+    calculation.textContent = `拆成 ${segments.length} 段，共读 ${length} KiB，涉及链 ${[...chains].join("、")}。`;
+  }
+  calculation.dataset.result = segments.length ? "ok" : "pending";
 }
 
 chunkSize.addEventListener("change", renderLayout);
 stripeSize.addEventListener("change", renderLayout);
 offset.addEventListener("input", renderLayout);
+readLength.addEventListener("input", renderLayout);
+
+for (const preset of document.querySelectorAll("[data-layout-preset]")) {
+  preset.addEventListener("click", () => {
+    const aligned = preset.dataset.layoutPreset === "aligned";
+    chunkSize.value = "256";
+    stripeSize.value = "3";
+    offset.value = aligned ? "256" : "500";
+    readLength.value = aligned ? "256" : "40";
+    renderLayout();
+  });
+}
+
 renderLayout();
+
+const serverVersion = document.getElementById("server-chain-version");
+const clientVersion = document.getElementById("client-chain-version");
+const faultOffline = document.getElementById("fault-offline");
+const faultSend = document.getElementById("fault-send");
+const faultRefresh = document.getElementById("fault-refresh");
+const faultReset = document.getElementById("fault-reset");
+const faultResult = document.getElementById("fault-result");
+const failureChain = document.querySelector(".failure-chain");
+const targetB = failureChain.querySelector("[data-target='B']");
+const targetC = failureChain.querySelector("[data-target='C']");
+let liveChainVersion = 1;
+let cachedChainVersion = 1;
+
+function renderFailover(message, result = "") {
+  const bOffline = liveChainVersion > 1;
+  serverVersion.textContent = `v${liveChainVersion}`;
+  clientVersion.textContent = `v${cachedChainVersion}`;
+  clientVersion.toggleAttribute("data-stale", cachedChainVersion !== liveChainVersion);
+  targetB.classList.toggle("is-offline", bOffline);
+  targetB.querySelector("span").textContent = bOffline ? "offline · 离线" : "serving · 中间目标";
+  if (bOffline) failureChain.append(targetB);
+  else failureChain.insertBefore(targetB, targetC);
+  faultOffline.disabled = bOffline;
+  faultRefresh.disabled = cachedChainVersion === liveChainVersion;
+  faultResult.textContent = message;
+  faultResult.dataset.result = result;
+}
+
+faultOffline.addEventListener("click", () => {
+  liveChainVersion = 2;
+  renderFailover("Mgmtd 发布链 v2。Storage 已切换到 A、C，客户端缓存仍是 v1。现在试着发送写请求。", "pending");
+  faultSend.focus();
+});
+
+faultSend.addEventListener("click", () => {
+  if (cachedChainVersion !== liveChainVersion) {
+    renderFailover("A 返回 kChainVersionMismatch。请求带的是 v1，A 已装载 v2。刷新路由后再试。", "pending");
+  } else {
+    const path = liveChainVersion === 1 ? "A → B → C" : "A → C";
+    renderFailover(`链版本 v${cachedChainVersion} 匹配，A 接受请求。转发路径为 ${path}。`, "ok");
+  }
+});
+
+faultRefresh.addEventListener("click", () => {
+  cachedChainVersion = liveChainVersion;
+  renderFailover("客户端已缓存 v2。再次发送写请求，检查新的转发路径。", "ok");
+  faultSend.focus();
+});
+
+faultReset.addEventListener("click", () => {
+  liveChainVersion = 1;
+  cachedChainVersion = 1;
+  renderFailover("当前 A、B、C 都可服务，客户端和服务端使用同一链版本。");
+});
+
+const quiz = document.getElementById("course-quiz");
+const quizScore = document.getElementById("quiz-score");
+const questions = [...quiz.querySelectorAll("[data-question]")];
+
+function renderQuiz() {
+  let answered = 0;
+  let correct = 0;
+  for (const question of questions) {
+    const selected = question.querySelector("input:checked");
+    const feedback = question.querySelector(".quiz-feedback");
+    feedback.hidden = !selected;
+    if (!selected) continue;
+
+    answered += 1;
+    const isCorrect = selected.value === question.dataset.answer;
+    if (isCorrect) correct += 1;
+    feedback.dataset.result = isCorrect ? "ok" : "pending";
+    feedback.querySelector("strong").textContent = isCorrect ? "回答正确" : "再想一想";
+  }
+  quizScore.textContent = `已答 ${answered} / ${questions.length} · 正确 ${correct}`;
+}
+
+quiz.addEventListener("change", renderQuiz);
+document.getElementById("quiz-reset").addEventListener("click", () => {
+  quiz.reset();
+  renderQuiz();
+});
+renderQuiz();

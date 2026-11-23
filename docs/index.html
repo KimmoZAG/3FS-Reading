@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="中文 3FS 学习手册。跟着文件的读写路径学习 DeepSeek 3FS 的架构、数据布局和 CRAQ，并在浏览器里动手实验。">
+  <meta name="description" content="DeepSeek 3FS 中文学习手册。跟踪文件读写，动手拆分跨块请求、模拟 CRAQ 与故障切换，再用源码和测验检验理解。">
   <meta name="theme-color" content="#f5f7f3">
   <title>3FS Reading · 中文学习手册</title>
   <link rel="icon" href="./mark.png" type="image/png">
@@ -20,6 +20,7 @@
       </a>
       <nav aria-label="学习导航">
         <a class="nav-link nav-home" href="#home" aria-current="page"><span class="nav-symbol" aria-hidden="true"></span>学习首页</a>
+        <a class="nav-link nav-index-link" href="#concepts"><span class="nav-symbol" aria-hidden="true"></span>知识索引</a>
         <p class="nav-label">章节</p>
         <ol class="course-nav">
           <li><a class="nav-link" href="#intro"><span class="nav-index">01</span>认识 3FS<span class="nav-check" aria-hidden="true">✓</span></a></li>
@@ -31,13 +32,16 @@
         </ol>
         <div class="nav-divider"></div>
         <a class="nav-link nav-lab" href="#lab"><span class="nav-symbol" aria-hidden="true"></span>交互实验室</a>
+        <a class="nav-link nav-quiz" href="#quiz"><span class="nav-symbol" aria-hidden="true"></span>章节测验</a>
       </nav>
+      <div class="mobile-resources"><a href="https://github.com/deepseek-ai/3FS">上游源码</a><a href="https://github.com/KimmoZAG/3FS-Reading">项目仓库</a></div>
       <div class="rail-progress js-only">
         <div class="progress-label"><label for="course-progress">学习进度</label><span id="progress-count">0 / 6</span></div>
         <progress id="course-progress" max="6" value="0">0 / 6</progress>
         <p id="progress-caption">完成一章后可手动标记</p>
       </div>
     </aside>
+    <div class="menu-scrim js-only" aria-hidden="true" hidden></div>
 
     <div class="workspace">
       <header class="topbar">
@@ -54,22 +58,24 @@
         <section id="home" class="screen" data-screen data-title="首页">
           <div class="hero">
             <div class="hero-copy">
-              <p class="eyebrow"><span class="eyebrow-line" aria-hidden="true"></span> Fire-Flyer File System</p>
-              <h1 tabindex="-1">读懂 <span>3FS</span></h1>
-              <p class="hero-lead">从打开一个文件开始，沿着元数据与数据两条路径，读懂 DeepSeek 的分布式文件系统。</p>
+              <p class="eyebrow"><span class="eyebrow-line" aria-hidden="true"></span> DeepSeek · Fire-Flyer File System</p>
+              <h1 tabindex="-1"><span>沿着一次读写，</span>读懂 <em>3FS</em></h1>
+              <p class="hero-lead">从文件名和字节偏移追到 SSD 副本，动手拆分请求，再用源码核对每一步。</p>
               <div class="hero-actions">
                 <a class="button primary" href="#intro" id="start-learning">开始学习</a>
                 <a class="button secondary" href="#lab">打开实验室</a>
               </div>
-              <p class="hero-meta"><span>6 章课程</span><span class="meta-dot" aria-hidden="true"></span><span>2 个浏览器实验</span></p>
+              <p class="hero-meta"><span>6 章课程</span><span class="meta-dot" aria-hidden="true"></span><span>3 个交互实验</span><span class="home-progress js-only" id="home-progress" hidden></span></p>
             </div>
 
             <figure class="topology" aria-label="3FS 请求路径示意图">
               <div class="topology-header">
-                <span class="topology-title"><span class="topology-indicator" aria-hidden="true"></span>请求路径</span>
+                <span class="topology-title">请求路径</span>
                 <div class="topology-controls js-only" role="group" aria-label="选择请求类型">
                   <button type="button" data-path="open" aria-pressed="true">open()</button>
                   <button type="button" data-path="read" aria-pressed="false">read()</button>
+                  <button type="button" data-path="write" aria-pressed="false">write()</button>
+                  <button type="button" data-path="routing" aria-pressed="false">路由</button>
                 </div>
               </div>
               <div class="topology-map">
@@ -81,21 +87,38 @@
                 <div class="topology-node endpoint" data-node="foundation"><span>持久化</span><b>FoundationDB</b></div>
                 <div class="topology-node endpoint" data-node="ssd"><span>数据块</span><b>NVMe SSD</b></div>
               </div>
-              <figcaption class="topology-caption" id="path-caption" aria-live="polite">打开文件时，客户端通过 Meta 获取属性和布局。</figcaption>
+              <figcaption class="topology-caption" aria-live="polite"><span id="path-phase">元数据</span><span id="path-caption">路径需要解析时，客户端向 Meta 查询 inode 和布局。</span></figcaption>
             </figure>
           </div>
 
+          <section class="case-study" aria-labelledby="worked-case">
+            <div class="case-copy">
+              <p class="eyebrow">贯穿例题</p>
+              <h2 id="worked-case">一次读取怎样跨过两个块？</h2>
+              <p>从 500 KiB 处读取 40 KiB。每块 256 KiB，文件按 A、B、C 三条链轮转。</p>
+              <a href="#layout-experiment" data-layout-preset="cross">在实验里复算</a>
+            </div>
+            <div class="case-diagram" aria-label="前 12 KiB 在链 B 的 chunk 1，余下 28 KiB 在链 C 的 chunk 2">
+              <code>pread(fd, buf, 40 * 1024, 500 * 1024)</code>
+              <div class="case-segments">
+                <span><b>12 KiB</b><small>Chunk 1 · 链 B</small></span>
+                <span><b>28 KiB</b><small>Chunk 2 · 链 C</small></span>
+              </div>
+              <div class="case-axis" aria-hidden="true"><span>500 KiB</span><span>512 KiB</span><span>540 KiB</span></div>
+            </div>
+          </section>
+
           <div class="section-heading">
             <h2>课程目录</h2>
-            <span>概念 / 源码 / 实验</span>
+            <a href="#concepts">浏览 12 个知识点</a>
           </div>
           <ol class="lesson-grid">
             <li><a class="lesson-card" href="#intro"><span class="card-index">01</span><h3>认识 3FS</h3><p>训练样本、检查点和推理缓存，对共享存储有哪些要求？</p><span class="card-time">约 5 分钟<span class="card-state" data-completion="intro" hidden>已完成</span></span></a></li>
             <li><a class="lesson-card" href="#architecture"><span class="card-index">02</span><h3>系统架构</h3><p>沿着文件请求认识客户端、Meta、Storage 和 Mgmtd。</p><span class="card-time">约 7 分钟<span class="card-state" data-completion="architecture" hidden>已完成</span></span></a></li>
             <li><a class="lesson-card" href="#layout"><span class="card-index">03</span><h3>文件与数据布局</h3><p>从 inode 和字节偏移算出 chunk，再找到对应的副本链。</p><span class="card-time">约 8 分钟<span class="card-state" data-completion="layout" hidden>已完成</span></span></a></li>
             <li><a class="lesson-card" href="#craq"><span class="card-index">04</span><h3>读写与 CRAQ</h3><p>跟踪一条副本链，观察写入、提交和未提交时的读取。</p><span class="card-time">约 10 分钟<span class="card-state" data-completion="craq" hidden>已完成</span></span></a></li>
-            <li><a class="lesson-card" href="#source"><span class="card-index">05</span><h3>从源码读起</h3><p>沿着一次 FUSE 读请求，从函数入口追到存储服务。</p><span class="card-time">约 12 分钟<span class="card-state" data-completion="source" hidden>已完成</span></span></a></li>
-            <li><a class="lesson-card" href="#review"><span class="card-index">06</span><h3>动手复盘</h3><p>用一个跨块读取的练习，把文件布局和副本协议串起来。</p><span class="card-time">约 10 分钟<span class="card-state" data-completion="review" hidden>已完成</span></span></a></li>
+            <li><a class="lesson-card" href="#source"><span class="card-index">05</span><h3>从源码读起</h3><p>沿查找、读取和写入三条路径，定位关键函数和判断分支。</p><span class="card-time">约 12 分钟<span class="card-state" data-completion="source" hidden>已完成</span></span></a></li>
+            <li><a class="lesson-card" href="#review"><span class="card-index">06</span><h3>动手复盘</h3><p>手算跨块读取，再为小随机读和检查点写入设计测量方案。</p><span class="card-time">约 10 分钟<span class="card-state" data-completion="review" hidden>已完成</span></span></a></li>
           </ol>
 
           <section class="source-strip" aria-labelledby="references-title">
@@ -108,6 +131,33 @@
           </section>
         </section>
 
+        <section id="concepts" class="screen concepts" data-screen data-title="知识索引">
+          <header class="lesson-head">
+            <h1 tabindex="-1">12 个 3FS 核心知识点</h1>
+            <p class="lead">先带着一个问题读概念。复习时可按术语定位到对应章节或实验。</p>
+          </header>
+          <div class="concept-search js-only" role="search" aria-label="知识点搜索">
+            <label for="concept-query">搜索知识点</label>
+            <input type="search" id="concept-query" placeholder="例如 inode、RDMA、链版本" autocomplete="off">
+            <span id="concept-count" role="status">12 个知识点</span>
+          </div>
+          <p class="empty-state" id="concept-empty" hidden>没有匹配的知识点。试试更短的关键词。</p>
+          <ol class="concept-grid">
+            <li data-concept><h2>共享命名空间</h2><p>训练节点用同样的目录和路径访问一组远端文件。计算可以独立扩容，存储带宽取决于网络和存储资源。</p><a href="#workloads">认识共享存储</a></li>
+            <li data-concept><h2>元数据与数据请求</h2><p>路径、权限和文件布局由 Meta 处理。客户端拿到布局和路由后，可直接向 Storage 请求数据块。</p><a href="#request-trace">跟踪一次读请求</a></li>
+            <li data-concept><h2>目录项与 inode</h2><p>目录项用父目录和名字找到对象。inode 保存该对象的属性和文件布局，两类记录通过 FoundationDB 事务持久化。</p><a href="#metadata-model">看元数据结构</a></li>
+            <li data-concept><h2>FUSE 与 USRBIO</h2><p>FUSE 提供熟悉的文件接口。USRBIO 在 FUSE 进程内用共享内存缓冲区 Iov 和环 Ior 批量提交异步 I/O。</p><a href="#usrbio">查看接口分工</a></li>
+            <li data-concept><h2>RDMA 与 SSD</h2><p>RDMA 让网卡在注册的内存区域间搬运数据，减少传输路径上的 CPU 搬运。底层 SSD、网络和小请求处理都可能限制带宽。</p><a href="#perf-plan">了解怎么测</a></li>
+            <li data-concept><h2>Chunk 与块内偏移</h2><p>文件偏移整除块大小得到块号，取余得到块内位置。跨过块边界的请求至少要分为两段。</p><a href="#layout-experiment">自己拆一次</a></li>
+            <li data-concept><h2>条带与副本链</h2><p>一个文件的多个 chunk 按布局散到不同链。同一 chunk 的各份副本保存在同一链的目标上。</p><a href="#layout-example">对照条带公式</a></li>
+            <li data-concept><h2>CRAQ 写入与提交</h2><p>写入从 Head 逐跳传播，Tail 先提交。确认反向回传，前序副本完成本地提交。</p><a href="#craq-experiment">推进一次写入</a></li>
+            <li data-concept><h2>未提交读</h2><p>3FS 默认在本地提交版本与更新版本不同时返回 <code>kChunkNotCommit</code>。显式放宽读取可以观察待提交版本。</p><a href="#pending-read">对照论文和实现</a></li>
+            <li data-concept><h2>链版本与故障切换</h2><p>路由版本描述链的成员和状态。Mgmtd 调整链时递增版本，持有旧路由的请求可能被当前节点拒绝。</p><a href="#failover-experiment">模拟路由刷新</a></li>
+            <li data-concept><h2>文件长度的可见性</h2><p>正在写入时，inode 长度可能落后。3FS 用周期性上报推进长度，并可在关闭或同步时查询尾块以校准。</p><a href="#length-visibility">比较两种提交范围</a></li>
+            <li data-concept><h2>吞吐量、IOPS 与尾延迟</h2><p>字节带宽、操作频率和慢请求等待分别回答不同问题。解读结果前要记录块大小、并发、读写模式和缓存条件。</p><a href="#perf-plan">设计一次基准测试</a></li>
+          </ol>
+        </section>
+
         <article id="intro" class="screen lesson" data-screen data-lesson data-title="认识 3FS">
           <header class="lesson-head">
             <p class="eyebrow">第 01 章 <span>·</span> 约 5 分钟</p>
@@ -115,14 +165,14 @@
             <p class="lead">想象训练集增大以后，几百个计算节点都要从同一组文件随机取样。共享存储既要跟得上并发读取，也要让应用继续使用熟悉的文件接口。</p>
           </header>
           <div class="lesson-body">
-            <h2>3FS 服务哪些工作负载？</h2>
+            <h2 id="workloads">3FS 服务哪些工作负载？</h2>
             <p>3FS 全称 Fire-Flyer File System，是 DeepSeek 开源的高性能分布式文件系统。计算节点可以通过同一文件命名空间访问远端数据。存储节点上的 SSD 分担 I/O，RDMA 网络负责高速数据传输。</p>
             <dl class="definition-list">
               <div><dt>训练数据读取</dt><dd>多个数据加载器并发读取样本。小随机读要同时看 IOPS 和尾延迟，大块顺序读则更容易跑满带宽。</dd></div>
               <div><dt>训练检查点</dt><dd>各 worker 集中写出模型和优化器状态。关注并行写入的总带宽，以及检查点什么时候可安全使用。</dd></div>
               <div><dt>推理 KVCache</dt><dd>重复请求可复用已有缓存。SSD 扩大容量，同时需要关注缓存命中率和取回缓存的延迟。</dd></div>
             </dl>
-            <h2>先分清三个指标</h2>
+            <h2 id="metrics">先分清三个指标</h2>
             <p><strong>吞吐量</strong>衡量单位时间传输的字节数，<strong>IOPS</strong>衡量单位时间完成的操作次数，<strong>延迟</strong>衡量一笔 I/O 等了多久。上游公布的约 <strong>6.6 TiB/s</strong> 是 180 台存储节点在大块读压测中的集群聚合吞吐，解释结果时还要一起看请求大小、并发和硬件条件。</p>
             <p class="reading-links"><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/README.md#performance">官方 README 的性能测试</a></p>
             <details class="self-check"><summary>自测 · 训练节点读小样本时，应该额外看什么？</summary><p>看小块随机读的 IOPS、P95/P99 延迟，以及数据加载器能否及时把样本交给 GPU。用同样的块大小和并发度比较结果。</p></details>
@@ -140,20 +190,22 @@
             <p class="lead">元数据回答文件是谁、如何定位。Storage 回答字节在哪里、哪个版本可读。Mgmtd 让客户端和服务共享集群路由。</p>
           </header>
           <div class="lesson-body">
-            <h2>四个组件如何协作</h2>
+            <h2 id="architecture-components">四个组件如何协作</h2>
             <dl class="definition-list">
               <div><dt>Client</dt><dd>应用通过 FUSE 挂载使用文件接口。客户端取得文件布局，结合路由信息算出要访问的存储链。</dd></div>
               <div><dt>Meta</dt><dd>处理路径查找、属性、权限和目录操作。目录项和 inode 持久化在 FoundationDB，Meta 实例按无状态方式设计。</dd></div>
               <div><dt>Storage</dt><dd>管理本地 SSD 上的存储目标（target），提供 chunk 读取、写入和复制。一个 SSD 可以承载多个 target。</dd></div>
               <div><dt>Mgmtd</dt><dd>收集服务心跳，维护成员和链配置，向服务及客户端提供路由。集群由主 Mgmtd 负责更新链。</dd></div>
             </dl>
-            <h2>跟踪一次文件读取</h2>
+            <h2 id="request-trace">跟踪一次文件读取</h2>
             <ol class="reading-steps">
               <li><strong>定位文件。</strong>需要查找路径或刷新属性时，客户端向 Meta 请求 inode 和布局。FUSE 的查找和打开路径可以复用客户端缓存。</li>
               <li><strong>计算数据路由。</strong>客户端将读取范围按 chunk 边界拆开，结合布局和 Mgmtd 下发的路由选出要访问的链。</li>
               <li><strong>读取数据。</strong>常见路径由客户端直接请求 Storage。存储服务从本地 SSD 读取数据，通过网络传给客户端。</li>
             </ol>
-            <aside class="callout"><strong>USRBIO 如何接入？</strong><p>应用仍用文件接口打开文件，再注册 fd。随后通过共享内存的 <code>Iov</code> 存放数据，通过 <code>Ior</code> 提交异步 I/O 并收取完成结果。元数据操作沿用原来的文件接口。</p></aside>
+            <h2 id="usrbio">FUSE 和 USRBIO 怎样分工？</h2>
+            <p>普通应用把 3FS 当成挂载文件系统，通过 FUSE 发起操作。对大量小 I/O 的应用，USRBIO 提供另一条数据通道。应用打开文件并注册 fd，用共享内存 <code>Iov</code> 存放数据，通过 <code>Ior</code> 排队提交异步请求，再回收完成项。这样可以减少应用与 FUSE 进程之间的数据搬运，并让多笔请求批量派发。</p>
+            <aside class="callout"><strong>定位一次延迟</strong><p>如果 <code>stat()</code> 慢，先观察客户端缓存与 Meta 请求。如果已经打开文件后的小随机读慢，再看数据路径的 I/O 并发、Storage 延迟和网络。</p><a href="#perf-plan">查看读写测量方案</a></aside>
             <p class="reading-links"><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/docs/design_notes.md#design-and-implementation">官方架构说明</a><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/lib/api/UsrbIo.md">USRBIO API 参考</a></p>
             <details class="self-check"><summary>自测 · Meta 服务重启后，目录项从哪里读回？</summary><p>目录项和 inode 的持久化记录在 FoundationDB。客户端可在有可用实例时切换 Meta 服务。</p></details>
           </div>
@@ -170,17 +222,20 @@
             <p class="lead">有了文件标识和读取偏移，客户端就能计算目标 chunk 与副本链。先做一遍手算，再去核对源码。</p>
           </header>
           <div class="lesson-body">
-            <h2>从文件名到 chunk</h2>
+            <h2 id="metadata-model">从文件名到 inode 和布局</h2>
             <p>路径查找沿目录项进行。目录项通过父目录 inode 与名字找到子对象，inode 保存权限、时间戳等属性。文件 inode 还保存长度和数据布局，包括 chunk 大小、条带宽度及选中的链信息。</p>
             <p>以普通文件数据为例，<code>chunkIndex</code> 由偏移整除 chunk 大小得到，块内偏移取余。chunk ID 包含 inode ID 和 chunk 序号。条带宽度表示这个文件使用的链数，文件布局的链列表决定每个条带槽对应哪条链。</p>
             <pre class="code-block"><code>chunkIndex = floor(offset / chunkSize)
 chunkOffset = offset % chunkSize
 stripeSlot = chunkIndex % stripeSize
 chain = layoutChains[stripeSlot]</code></pre>
-            <h2>试算 640 KiB 处的数据</h2>
-            <p>取教学用布局，chunk 大小为 256 KiB，链列表为 <code>[A, B, C]</code>。640 KiB 落在从 0 开始计数的第 <strong>2</strong> 号 chunk，块内偏移为 <strong>128 KiB</strong>。第 2 号条带槽映射到 <strong>链 C</strong>，第 3 号 chunk 则回到链 A。</p>
-            <aside class="callout"><strong>分条带与做副本</strong><p>不同 chunk 分散到多条链，以并行使用不同存储资源。一个 chunk 内的多个副本位于同一条链的不同 target 上，以便在单个目标故障时保留可用数据。</p><a href="#layout-experiment">打开条带映射实验</a></aside>
-            <p class="reading-links"><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/docs/design_notes.md#location-of-file-chunks">官方布局说明</a><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/fbs/meta/Schema.cc#L62-L86">偏移到 chunk 与链的源码</a><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/fbs/meta/Schema.cc#L192-L197">条带槽计算</a></p>
+            <h2 id="layout-example">手算一次跨块读取</h2>
+            <p>chunk 大小取 256 KiB，链列表取 <code>[A, B, C]</code>。从 500 KiB 处开始读取 40 KiB。第一段落在 chunk 1，块内偏移是 244 KiB，所以这一块还能读 <strong>12 KiB</strong>，发往链 B。读到文件偏移 512 KiB 时跨入 chunk 2，从块首读取剩余的 <strong>28 KiB</strong>，发往链 C。</p>
+            <aside class="callout"><strong>分条带与做副本</strong><p>不同 chunk 分散到多条链，以并行使用不同存储资源。一个 chunk 的多个副本位于同一条链的不同 target 上，以便在单个目标故障时保留可用数据。</p><a href="#layout-experiment" data-layout-preset="cross">复算并尝试改变条带宽度</a></aside>
+            <h2 id="length-visibility">写完 chunk 后，文件长度何时更新？</h2>
+            <p>数据块的提交状态由 Storage 的副本协议推进。文件长度则存在 inode 里。按上游设计，打开写入期间客户端会周期性上报写入的最大位置，因此观察到的文件长度可能暂时滞后。处理关闭或 <code>fsync()</code> 时，Meta 可依据最后一个 chunk 的位置和长度校准。</p>
+            <p>读源码时分别追两条线，先看单个 chunk 何时推进 <code>commitVer</code>，再看涉及文件长度的属性更新。</p>
+            <p class="reading-links"><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/docs/design_notes.md#dynamic-file-attributes">官方文件长度说明</a><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/fbs/meta/Schema.cc#L62-L86">偏移到 chunk 与链的源码</a><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/fbs/meta/Schema.cc#L192-L197">条带槽计算</a></p>
             <details class="self-check"><summary>自测 · 从 250 KiB 读取 16 KiB，怎样拆请求？</summary><p>切在 256 KiB 的边界。先读取 chunk 0 末尾的 6 KiB（链 A），再读取 chunk 1 开头的 10 KiB（链 B）。</p></details>
           </div>
           <footer class="lesson-footer">
@@ -196,17 +251,19 @@ chain = layoutChains[stripeSlot]</code></pre>
             <p class="lead">同一个 chunk 写到链上的所有可写目标。读请求可以在可读副本之间分摊，遇到正在写入的副本时要检查本地版本。</p>
           </header>
           <div class="lesson-body">
-            <h2>一次写入如何沿链传播</h2>
+            <h2 id="chain-write">一次写入如何沿链传播</h2>
             <ol class="reading-steps">
               <li><strong>从链头开始。</strong>客户端把写请求发给 Head，链头串行化同一 chunk 的写入。各目标检查请求携带的链版本。</li>
               <li><strong>逐跳写入待提交版本。</strong>Head 与中间目标暂存新版本，并向后继转发。Tail 收到写入后提交新版本。</li>
               <li><strong>确认逐跳返回。</strong>Tail 的确认向前传播。中间目标及 Head 各自提交对应版本，最终由 Head 确认写入。</li>
             </ol>
-            <h2>3FS 怎样处理未提交读</h2>
+            <h2 id="pending-read">3FS 怎样处理未提交读</h2>
             <p>稳定状态下，任一可读目标都能返回本地已提交数据。原始 CRAQ 论文中的强一致读在副本有未提交更新时会向链尾查询已提交的版本。3FS 在本地 <code>commitVer</code> 和 <code>updateVer</code> 不同时，默认返回 <code>kChunkNotCommit</code>，存储客户端将其归类为快速重试错误。显式允许未提交读时，客户端可以取得待提交版本。</p>
             <aside class="callout"><strong>观察哨点</strong><p>把实验推进到 Tail 刚提交的瞬间。分别点 Tail 和 Mid，观察两次默认读的差异。再推进一步，检查 Mid 的状态如何变化。</p><a href="#craq-experiment">打开 CRAQ 复制实验</a></aside>
-            <h2>中间目标离线时</h2>
-            <p>Mgmtd 根据心跳更新目标状态与链版本，剩余健康目标可以组成新的有效链。请求若使用旧路由，可能收到版本不匹配错误，客户端需要刷新路由或重试。恢复的目标完成同步后再恢复相应的服务资格。</p>
+            <h2 id="chain-failure">中间目标离线时</h2>
+            <p>假设链版本 1 上的顺序为 A、B、C。Mgmtd 确认 B 离线后可调整成员顺序并递增链版本，A 与 C 继续服务。Storage 已装载新链时，携带旧链版本的写会被拒绝。客户端用新路由重试，数据仍归属于原来的链 ID。</p>
+            <p>链版本描述的是链的配置。<code>commitVer</code> 和 <code>updateVer</code> 描述的是某个 chunk 的更新进度。B 重新加入时可先进入 <code>syncing</code>，参与同步写入，完成恢复后再进入能服务客户端读的状态。</p>
+            <p class="reading-links"><a href="#failover-experiment">打开故障切换实验</a><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/docs/design_notes.md#failure-detection">链状态及读写资格</a></p>
             <p class="reading-links"><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/docs/design_notes.md#data-replication">3FS 复制设计</a><a href="https://www.usenix.org/legacy/event/usenix09/tech/full_papers/terrace/terrace.pdf">CRAQ 原论文</a><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/storage/store/ChunkReplica.cc#L36-L70">3FS 本地读版本检查</a></p>
             <details class="self-check"><summary>自测 · Tail 已提交 v2、Mid v2 仍待提交，默认读 Mid 会怎样？</summary><p>Mid 的两个版本号不同，返回 <code>kChunkNotCommit</code>。推进提交确认后再读，Mid 就能从本地返回 v2。</p></details>
           </div>
@@ -220,19 +277,25 @@ chain = layoutChains[stripeSlot]</code></pre>
           <header class="lesson-head">
             <p class="eyebrow">第 05 章 <span>·</span> 约 12 分钟</p>
             <h1 tabindex="-1">从源码读起</h1>
-            <p class="lead">沿普通 FUSE 读取的主路径追踪。从入口拿到的 <code>off</code> 和 <code>size</code>，正好对应之前做过的拆块练习。</p>
+            <p class="lead">用同一文件分别追路径查找、跨块读取和写入确认。从读入口拿到的 <code>off</code> 和 <code>size</code> 对应首页的拆块例题。</p>
           </header>
           <div class="lesson-body">
-            <h2>一次读请求的四个检查点</h2>
+            <h2 id="source-meta">路径查找 · FUSE 到 Meta</h2>
+            <p>从 <code>hf3fs_lookup</code> 找到 <code>metaClient-&gt;stat</code>。再查看 <code>StatOp</code> 怎样读取 inode 与目录项，理解同一个文件布局为什么能由不同 Meta 实例取得。</p>
+            <p class="reading-links"><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/fuse/FuseOps.cc#L644-L725">FUSE 查找入口</a><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/meta/store/ops/Stat.cc#L30-L144">Meta 的 StatOp</a></p>
+            <h2 id="source-read">读取 · 拆块到版本校验</h2>
             <ol class="source-steps">
               <li><div><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/fuse/FuseOps.cc#L1473-L1548"><code>hf3fs_read</code></a><span>src/fuse/FuseOps.cc</span></div><p>从文件句柄拿 inode，准备缓冲区，调用 <code>PioV::addRead</code> 和 <code>executeRead</code>。</p></li>
               <li><div><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/fuse/PioV.cc#L103-L140"><code>PioV</code></a><span>src/fuse/PioV.cc</span></div><p>找出 chunk 边界和每段长度，用文件布局为每个 I/O 算出链，最后调用存储客户端的 <code>batchRead</code>。</p></li>
               <li><div><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/client/storage/StorageClientImpl.cc#L1563"><code>StorageClientImpl::batchRead</code></a><span>src/client/storage/StorageClientImpl.cc</span></div><p>跟进读请求的路由、批次执行和重试。搜索 <code>isFastRetryError</code>，查看哪些错误会触发快速重试。</p></li>
-              <li><div><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/storage/service/StorageOperator.cc#L82"><code>StorageOperator::batchRead</code></a><span>src/storage/service/StorageOperator.cc</span></div><p>跟到 Storage 侧读入口，再读 <code>ChunkReplica::aioPrepareRead</code>，查看数据和提交版本的检查时机。</p></li>
+              <li><div><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/storage/service/StorageOperator.cc#L82"><code>StorageOperator::batchRead</code></a><span>src/storage/service/StorageOperator.cc</span></div><p>跟到 Storage 侧读入口，再读 <a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/storage/store/ChunkReplica.cc#L38-L67"><code>ChunkReplica::aioPrepareRead</code></a>，找到 <code>commitVer != updateVer</code> 的检查。</p></li>
             </ol>
-            <h2>另外两条路可以怎么追</h2>
-            <p>找元数据时，从 FUSE 的 <code>hf3fs_lookup</code> 追到 <code>metaClient-&gt;stat</code>，从 <code>src/meta/store/</code> 里的目录项和 inode 结构理解事务。找写入时，从 <code>StorageOperator::write</code> 追到更新、转发和提交，最后对照 <code>specs/DataStorage</code> 的 P 模型。</p>
-            <p class="reading-links"><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/fuse/FuseOps.cc#L644-L725">FUSE 路径查找</a><a href="https://github.com/deepseek-ai/3FS/tree/2dcbff518ea53be75c9702d2736134c021f9643d/src/meta/store">Meta 事务与存储</a><a href="https://github.com/deepseek-ai/3FS/tree/2dcbff518ea53be75c9702d2736134c021f9643d/specs/DataStorage">DataStorage 协议模型</a></p>
+            <h2 id="source-write">写入 · 刷出缓冲到确认</h2>
+            <ol class="source-steps">
+              <li><div><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/fuse/FuseOps.cc#L424-L469"><code>flushBuf</code></a><span>src/fuse/FuseOps.cc</span></div><p>从 <code>hf3fs_write</code> 追到刷出路径。找到 <code>PioV::addWrite</code>，核对读写共用的分块逻辑。</p></li>
+              <li><div><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/storage/service/StorageOperator.cc#L233-L271"><code>StorageOperator::write</code></a><span>src/storage/service/StorageOperator.cc</span></div><p>检查请求链版本和本地 target，再进入更新路径。接着看 <a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/src/storage/service/StorageOperator.cc#L431-L491">转发与提交</a>中 <code>commitVer</code> 如何随确认返回。</p></li>
+            </ol>
+            <p class="reading-links"><a href="https://github.com/deepseek-ai/3FS/tree/2dcbff518ea53be75c9702d2736134c021f9643d/specs/DataStorage">DataStorage 的 P 协议模型</a><a href="#craq-experiment">用复制实验对应这段代码</a></p>
             <details class="self-check"><summary>自测 · 拆分读区间和判断副本待提交分别在哪一端？</summary><p><code>PioV</code> 在客户端按 chunk 边界拆区间。<code>ChunkReplica</code> 在 Storage 侧检查本地副本版本。</p></details>
           </div>
           <footer class="lesson-footer">
@@ -248,37 +311,71 @@ chain = layoutChains[stripeSlot]</code></pre>
             <p class="lead">用一道跨块读题把布局、路由与复制串起来。先写下自己的推导，再用实验或源码核对。</p>
           </header>
           <div class="lesson-body">
-            <h2>练习题 · 读取一个跨块样本</h2>
+            <h2 id="review-case">练习题 · 读取一个跨块样本</h2>
             <p>文件采用 256 KiB chunk，链列表为 <code>[A, B, C]</code>。应用从 <strong>500 KiB</strong> 处读 <strong>40 KiB</strong>。此时链 C 的中间目标刚收到新版本，链尾尚未提交。</p>
             <ol class="reading-steps">
               <li>计算两段读取各自的 chunk 序号、块内偏移、长度与链。</li>
               <li>如果链 C 的这段读被派给了中间目标，默认读会返回什么？</li>
               <li>用两句话复述这一次读取中 Meta、Mgmtd 和 Storage 各自负责的事。</li>
             </ol>
-            <p class="reading-links"><a href="#layout-experiment">用条带实验核对偏移</a><a href="#craq-experiment">用复制实验核对状态</a></p>
+            <p class="reading-links"><a href="#layout-experiment" data-layout-preset="cross">用条带实验核对偏移</a><a href="#craq-experiment">用复制实验核对状态</a><a href="#quiz">做六题章节测验</a></p>
             <details class="self-check"><summary>展开参考答案</summary><p>第一段在 chunk 1、链 B，块内偏移 244 KiB，读 12 KiB。第二段在 chunk 2、链 C，块内偏移 0，读剩余 28 KiB。</p><p>若链 C 的中间目标本地有未提交更新，默认读返回 <code>kChunkNotCommit</code>，客户端可重试。Meta 提供文件布局，Mgmtd 提供链路由。客户端用这两份信息计算目标，由 Storage 读出字节。</p></details>
-            <h2>延伸到真实集群</h2>
+            <h2 id="perf-plan">为两类负载设计测量</h2>
+            <dl class="definition-list">
+              <div><dt>训练样本随机读</dt><dd>固定块大小与任务数，从低并发向上扫队列深度。一起记 IOPS、P99 以及数据加载器有没有跟不上。可用 4 KiB 小请求作为一组对照。</dd></div>
+              <div><dt>训练检查点写入</dt><dd>尽量复现多个 worker 同时写不同文件。记录聚合写入带宽、最慢 worker 用时和同步完成时间。可用 1 MiB 请求观察大块写带宽。</dd></div>
+            </dl>
+            <p>先记录客户端数、链和副本数、接口（FUSE 或 USRBIO）、块大小，以及缓存状态。每次只改一个参数。例如同为 1 GiB/s，4 KiB 对应约 26 万 IOPS，1 MiB 对应 1024 IOPS。两组数反映的每秒工作量差别很大。</p>
+            <h2 id="cluster-reading">延伸到真实集群</h2>
             <p>官方部署指南以一组 Linux 节点为例，使用 RDMA 网络、NVMe SSD、FoundationDB 和监控依赖。阅读时可以先画一张服务拓扑，再按指南定位创建 target、上传 chain table、挂载 FUSE 的步骤。在具备配套环境的测试集群里，可用上游的 USRBIO fio 引擎练习控制块大小和并发度。</p>
             <p class="reading-links"><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/deploy/README.md">官方部署指南</a><a href="https://github.com/deepseek-ai/3FS/blob/2dcbff518ea53be75c9702d2736134c021f9643d/benchmarks/fio_usrbio/README.md">USRBIO fio 文档</a></p>
           </div>
           <footer class="lesson-footer">
             <button class="button secondary complete-button js-only" type="button" data-mark="review" aria-pressed="false">标记为已完成</button>
-            <a class="button primary" href="#home">回到课程目录</a>
+            <a class="button primary" href="#quiz">开始章节测验</a>
           </footer>
         </article>
         <section id="lab" class="screen lab" data-screen data-title="交互实验室">
           <header class="lesson-head">
-            <p class="eyebrow"><span class="eyebrow-line" aria-hidden="true"></span> 3FS Experiments</p>
             <h1 tabindex="-1">交互实验室</h1>
-            <p class="lead">在浏览器里逐步推进一次写入，或者换一个文件偏移，观察副本状态与数据路由如何变化。</p>
-            <div class="lab-jump"><a href="#craq-experiment">CRAQ 链式复制</a><a href="#layout-experiment">条带映射</a></div>
+            <p class="lead">用教学模型拆分读区间、推进副本提交，再观察旧路由在切换时会遇到什么。</p>
+            <nav class="lab-jump" aria-label="实验目录"><a href="#layout-experiment">跨块与条带</a><a href="#craq-experiment">CRAQ 链式复制</a><a href="#failover-experiment">故障切换</a></nav>
           </header>
           <noscript><p class="callout">请开启 JavaScript 来运行下面的实验。</p></noscript>
+
+          <section id="layout-experiment" class="experiment" aria-labelledby="striping-title">
+            <div class="experiment-intro">
+              <h2 id="striping-title" tabindex="-1">跨块读取与条带映射</h2>
+              <p>输入读取起点和长度。在 8 个等长 chunk 的教学文件里，找出每段数据的块内偏移与目标链。</p>
+            </div>
+            <div class="experiment-body js-only">
+              <div class="layout-controls">
+                <label for="chunk-size">Chunk 大小<select id="chunk-size"><option value="64">64 KiB</option><option value="128">128 KiB</option><option value="256" selected>256 KiB</option><option value="512">512 KiB</option><option value="1024">1024 KiB</option></select></label>
+                <label for="stripe-size">条带宽度<select id="stripe-size"><option value="1">1 条链</option><option value="2">2 条链</option><option value="3" selected>3 条链</option><option value="4">4 条链</option></select></label>
+                <label for="file-offset">起点（KiB）<input id="file-offset" type="number" min="0" max="2047" step="1" value="500" inputmode="numeric" aria-describedby="offset-range"></label>
+                <label for="read-length">长度（KiB）<input id="read-length" type="number" min="1" max="1548" step="1" value="40" inputmode="numeric" aria-describedby="offset-range"></label>
+              </div>
+              <p class="form-hint" id="offset-range">示例文件共 2048 KiB。点任一块可把起点移到块首。</p>
+              <div class="experiment-presets" role="group" aria-label="读取示例">
+                <button class="button secondary" type="button" data-layout-preset="cross">跨块读取</button>
+                <button class="button secondary" type="button" data-layout-preset="aligned">对齐读取</button>
+              </div>
+              <div class="chunk-map" id="chunk-grid" role="group" aria-label="文件的数据块"></div>
+              <div class="table-scroll" id="layout-table" role="region" aria-label="拆分结果" tabindex="0">
+                <table class="range-table">
+                  <thead><tr><th scope="col">文件区间</th><th scope="col">Chunk</th><th scope="col">块内偏移</th><th scope="col">长度</th><th scope="col">链</th></tr></thead>
+                  <tbody id="layout-segments"></tbody>
+                </table>
+              </div>
+              <p class="read-result" id="layout-calculation" role="status"></p>
+            </div>
+            <div class="experiment-footer"><a href="#layout-example">回到第 03 章的推导</a><span>区间单位为 KiB，包含起点，终点除外</span></div>
+          </section>
 
           <section id="craq-experiment" class="experiment" aria-labelledby="replication-title">
             <div class="experiment-intro">
               <h2 id="replication-title" tabindex="-1">CRAQ 链式复制</h2>
-              <p>三副本、单 chunk 的正常写入流程。推进写入，然后点击任一副本发起读请求。</p>
+              <p>推进三副本链的单 chunk 写入。每一步都可以点任意副本发起读请求。</p>
             </div>
             <div class="experiment-body js-only">
               <div class="replica-chain" role="group" aria-label="选择要读取的副本">
@@ -291,6 +388,7 @@ chain = layoutChains[stripeSlot]</code></pre>
               <div class="experiment-stage"><span id="replication-step">就绪</span><p id="replication-status" aria-live="polite">三个目标都可返回 v1。下一次写入将产生 v2。</p></div>
               <div class="experiment-actions">
                 <button class="button primary" id="advance-replication" type="button">开始写入 v2</button>
+                <button class="button secondary" id="previous-replication" type="button" disabled>上一步</button>
                 <button class="button secondary" id="reset-replication" type="button">重置</button>
                 <label class="check-control"><input type="checkbox" id="relaxed-read">允许读取未提交版本</label>
               </div>
@@ -299,28 +397,85 @@ chain = layoutChains[stripeSlot]</code></pre>
             <div class="experiment-footer"><a href="#craq">阅读第 04 章</a><span>模型省略故障、并发写入和批量 I/O</span></div>
           </section>
 
-          <section id="layout-experiment" class="experiment" aria-labelledby="striping-title">
+          <section id="failover-experiment" class="experiment" aria-labelledby="failover-title">
             <div class="experiment-intro">
-              <h2 id="striping-title" tabindex="-1">文件条带映射</h2>
-              <p>用 8 个 chunk 观察已选链列表中的循环映射。输入字节偏移（以 KiB 表示），或直接点一个块。</p>
+              <h2 id="failover-title" tabindex="-1">故障切换与路由版本</h2>
+              <p>模拟 Mgmtd 确认 B 离线，然后在刷新路由前后各发一次写请求。</p>
             </div>
             <div class="experiment-body js-only">
-              <div class="layout-controls">
-                <label for="chunk-size">Chunk 大小<select id="chunk-size"><option value="64">64 KiB</option><option value="128">128 KiB</option><option value="256" selected>256 KiB</option><option value="512">512 KiB</option><option value="1024">1024 KiB</option></select></label>
-                <label for="stripe-size">条带宽度<select id="stripe-size"><option value="1">1 条链</option><option value="2">2 条链</option><option value="3" selected>3 条链</option><option value="4">4 条链</option></select></label>
-                <label for="file-offset">文件偏移（KiB）<input id="file-offset" type="number" min="0" max="2047" step="1" value="640" inputmode="numeric" aria-describedby="offset-range"></label>
-              </div>
-              <p class="form-hint" id="offset-range">可选偏移 0–2047 KiB</p>
-              <div class="chunk-map" id="chunk-grid" role="group" aria-label="文件的数据块"></div>
-              <dl class="layout-results" aria-live="polite">
-                <div><dt>Chunk 序号</dt><dd id="chunk-index">2</dd></div>
-                <div><dt>块内偏移</dt><dd id="chunk-offset">128 KiB</dd></div>
-                <div><dt>副本链</dt><dd id="chain-result">链 C</dd></div>
+              <dl class="route-versions">
+                <div><dt>Mgmtd 发布的链版本</dt><dd id="server-chain-version">v1</dd></div>
+                <div><dt>客户端缓存的链版本</dt><dd id="client-chain-version">v1</dd></div>
               </dl>
-              <p class="read-result" id="layout-calculation">640 ÷ 256 取整得到 2，余数为 128。第 2 号条带槽对应链 C。</p>
+              <ol class="failure-chain" aria-label="当前链顺序">
+                <li data-target="A"><b>目标 A</b><span>serving · 链头</span></li>
+                <li data-target="B"><b>目标 B</b><span>serving · 中间目标</span></li>
+                <li data-target="C"><b>目标 C</b><span>serving · 链尾</span></li>
+              </ol>
+              <div class="experiment-actions">
+                <button class="button primary" id="fault-offline" type="button">模拟 B 离线</button>
+                <button class="button secondary" id="fault-send" type="button">发送写请求</button>
+                <button class="button secondary" id="fault-refresh" type="button" disabled>刷新路由</button>
+                <button class="button secondary" id="fault-reset" type="button">重置</button>
+              </div>
+              <p class="read-result" id="fault-result" role="status">当前 A、B、C 都可服务，客户端和服务端使用同一链版本。</p>
             </div>
-            <div class="experiment-footer"><a href="#layout">阅读第 03 章</a><span>链列表用 A、B、C、D 表示</span></div>
+            <div class="experiment-footer"><a href="#chain-failure">阅读链状态变化</a><span>模型演示路由校验及转发</span></div>
           </section>
+        </section>
+
+        <section id="quiz" class="screen quiz" data-screen data-title="章节测验">
+          <header class="lesson-head">
+            <h1 tabindex="-1">章节测验</h1>
+            <p class="lead">六题检验你能否说清请求路径、版本和测量指标。选择后即可看到解释。</p>
+          </header>
+          <noscript><p class="callout">开启 JavaScript 可即时查看反馈，也可在各章中展开自测。</p></noscript>
+          <form class="quiz-form js-only" id="course-quiz">
+            <div class="quiz-summary"><p id="quiz-score" role="status">已答 0 / 6 · 正确 0</p><button class="button secondary" type="button" id="quiz-reset">重做测验</button></div>
+
+            <fieldset class="quiz-card" data-question data-answer="b">
+              <legend>01 · 小随机读变慢时，先额外看哪些数据？</legend>
+              <label><input type="radio" name="question-1" value="a">只看集群的峰值带宽</label>
+              <label><input type="radio" name="question-1" value="b">看该块大小下的 IOPS 和 P99 延迟</label>
+              <label><input type="radio" name="question-1" value="c">只统计文件数量</label>
+              <div class="quiz-feedback" hidden><strong></strong><p>小请求可能受每秒操作数和慢请求影响。对照时要固定块大小与并发。</p><a href="#metrics">回看性能指标</a></div>
+            </fieldset>
+            <fieldset class="quiz-card" data-question data-answer="a">
+              <legend>02 · 客户端已取得文件布局和路由，普通数据读可以发往哪里？</legend>
+              <label><input type="radio" name="question-2" value="a">对应链的可读 Storage 目标</label>
+              <label><input type="radio" name="question-2" value="b">FoundationDB</label>
+              <label><input type="radio" name="question-2" value="c">Mgmtd</label>
+              <div class="quiz-feedback" hidden><strong></strong><p>客户端用布局和路由把请求发给可读副本，Storage 从本地存储读出字节。</p><a href="#request-trace">回看请求路径</a></div>
+            </fieldset>
+            <fieldset class="quiz-card" data-question data-answer="c">
+              <legend>03 · 256 KiB 每块，从 500 KiB 读 40 KiB，第一段有多长？</legend>
+              <label><input type="radio" name="question-3" value="a">40 KiB</label>
+              <label><input type="radio" name="question-3" value="b">28 KiB</label>
+              <label><input type="radio" name="question-3" value="c">12 KiB</label>
+              <div class="quiz-feedback" hidden><strong></strong><p>第一段结束在 512 KiB，长度是 512 − 500 = 12 KiB。第二段读剩下的 28 KiB。</p><a href="#layout-experiment" data-layout-preset="cross">到实验中复算</a></div>
+            </fieldset>
+            <fieldset class="quiz-card" data-question data-answer="a">
+              <legend>04 · Tail 已提交 v2、Mid 仍待提交，默认读 Mid 会怎样？</legend>
+              <label><input type="radio" name="question-4" value="a">收到 kChunkNotCommit，客户端可重试</label>
+              <label><input type="radio" name="question-4" value="b">直接返回 v2</label>
+              <label><input type="radio" name="question-4" value="c">直接返回已提交的 v1</label>
+              <div class="quiz-feedback" hidden><strong></strong><p>3FS 的本地读检查发现提交版本与更新版本不同，会要求客户端重试。确认回传后 Mid 可返回 v2。</p><a href="#pending-read">回看未提交读</a></div>
+            </fieldset>
+            <fieldset class="quiz-card" data-question data-answer="b">
+              <legend>05 · Storage 已切到链 v2，携带旧链 v1 的写请求会怎样？</legend>
+              <label><input type="radio" name="question-5" value="a">在新链上按旧版本继续写</label>
+              <label><input type="radio" name="question-5" value="b">版本检查拒绝请求，客户端可刷新路由重试</label>
+              <label><input type="radio" name="question-5" value="c">等待旧副本完成 chunk 提交就能继续</label>
+              <div class="quiz-feedback" hidden><strong></strong><p>请求携带的链版本和节点当前版本要匹配。刷新路由后，可用同一链 ID 按新链成员发起写入。</p><a href="#failover-experiment">重演故障切换</a></div>
+            </fieldset>
+            <fieldset class="quiz-card" data-question data-answer="c">
+              <legend>06 · 数据块已提交，另一客户端为什么仍可能看到旧文件长度？</legend>
+              <label><input type="radio" name="question-6" value="a">所有文件读取都由链尾处理</label>
+              <label><input type="radio" name="question-6" value="b">Mgmtd 尚未分配新的链版本</label>
+              <label><input type="radio" name="question-6" value="c">inode 长度通过独立的元数据路径更新</label>
+              <div class="quiz-feedback" hidden><strong></strong><p>副本提交和 inode 长度更新经过不同路径。打开写入期间，长度上报可能晚于块提交。</p><a href="#length-visibility">回看文件长度一节</a></div>
+            </fieldset>
+          </form>
         </section>
       </main>
 
